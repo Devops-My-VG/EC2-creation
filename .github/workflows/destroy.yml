@@ -1,0 +1,71 @@
+name: Destroy EC2 Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "DESTROY" to confirm'
+        required: true
+        default: 'no'
+
+concurrency:
+  group: ec2-destroy
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_REGION: us-east-1
+  BUCKET_NAME: terraform-infra-metadata-${{ secrets.AWS_ACCOUNT_ID }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate input
+        run: |
+          if [[ "${{ github.event.inputs.confirm }}" != "DESTROY" ]]; then
+            echo "Must confirm with DESTROY"
+            exit 1
+          fi
+
+  destroy:
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform Destroy
+        run: |
+          terraform init
+          terraform state list || echo "(no state)"
+          terraform destroy -auto-approve
+      - name: Fallback Cleanup
+        if: always()
+        run: |
+          echo "Running fallback cleanup..."
+          IDS=$(aws ec2 describe-instances \
+            --filters "Name=tag:Project,Values=terraform-ec2" \
+                      "Name=instance-state-name,Values=running,stopped,pending" \
+            --query 'Reservations[].Instances[].InstanceId' --output text)
+
+          if [ -n "$IDS" ]; then
+            for id in $IDS; do
+              aws ec2 terminate-instances --instance-ids "$id"
+            done
+            for id in $IDS; do
+              aws ec2 wait instance-terminated --instance-ids "$id"
+            done
+          fi
+
+          aws ec2 describe-security-groups \
+            --filters "Name=tag:Project,Values=terraform-ec2" \
+            --query 'SecurityGroups[].GroupId' --output text | \
+            xargs -r -n1 aws ec2 delete-security-group --group-id
+
+          aws ec2 delete-key-pair --key-name terraform-ec2-key || true
+
+          aws s3 rm "s3://$BUCKET_NAME/ec2/" --recursive || true
+          aws s3 rm "s3://$BUCKET_NAME/terraform-state/ec2/" --recursive || true

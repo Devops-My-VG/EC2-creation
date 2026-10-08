@@ -1,0 +1,81 @@
+name: Plan and Apply EC2 Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/destroy.yml'
+      - 'README.md'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ec2-apply
+  cancel-in-progress: false
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_REGION: us-east-1
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check bucket exists
+        env:
+          BUCKET: terraform-infra-metadata-${{ secrets.AWS_ACCOUNT_ID }}
+        run: |
+          aws s3api head-bucket --bucket "$BUCKET" || { echo "Run terraform-s3-bucket repo first"; exit 1; }
+
+  fmt-and-validate:
+    needs: preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  plan:
+    needs: fmt-and-validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - run: terraform plan -out=tfplan -no-color
+      - run: terraform show -no-color tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ec2-tfplan
+          path: tfplan
+
+  apply:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [plan]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform init
+      - uses: actions/download-artifact@v4
+        with:
+          name: ec2-tfplan
+      - run: terraform apply -auto-approve tfplan
+      - name: Print Output
+        run: |
+          echo "## EC2 Details" >> $GITHUB_STEP_SUMMARY
+          echo "Public IP: $(terraform output -raw public_ip)" >> $GITHUB_STEP_SUMMARY
+          echo "SSH: $(terraform output -raw ssh_command)" >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ec2-key
+          path: ec2-key.pem
+          retention-days: 1
