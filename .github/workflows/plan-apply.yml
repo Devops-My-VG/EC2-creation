@@ -58,8 +58,7 @@ jobs:
           path: tfplan
 
   apply:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [plan]
+     needs: [plan]
     runs-on: ubuntu-latest
     environment: production
     steps:
