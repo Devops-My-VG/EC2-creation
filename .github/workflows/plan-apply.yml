@@ -58,7 +58,7 @@ jobs:
           path: tfplan
 
   apply:
-     needs: [plan]
+    needs: [plan]
     runs-on: ubuntu-latest
     environment: production
     steps:
