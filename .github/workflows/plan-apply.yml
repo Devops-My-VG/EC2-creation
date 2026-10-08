@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Check bucket exists
         env:
-          BUCKET: terraform-infra-metadata-${{ secrets.AWS_ACCOUNT_ID }}
+          BUCKET: terraform-infra-metadata-08102026
         run: |
           aws s3api head-bucket --bucket "$BUCKET" || { echo "Run terraform-s3-bucket repo first"; exit 1; }
 
